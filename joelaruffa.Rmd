@@ -1,0 +1,211 @@
+---
+title: "Pepsi Co Data Science Challenge"
+author: "Joe  LaRuffa"
+date: "10/22/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(psych)
+library(tibble)
+library(dplyr)
+library(lattice)
+library(ggplot2)
+library(lindia)
+library(caret)
+library(here)
+library(ggpubr)
+library(ggfortify)
+library(MASS)
+library(lindia)
+library(olsrr)
+library(GGally)
+library(devtools) 
+library(ggmap)
+library(dbscan)
+library(maps)
+library(factoextra)
+library(stats)
+library(lubridate)
+library(UsingR)
+```
+
+# Import and Clean the data
+
+```{r}
+sales <- read.csv("~/Documents/Pepsi Co. Data Science Challenge/nyas_challenge_2021_sales.csv")
+media <- read.csv("~/Documents/Pepsi Co. Data Science Challenge/nyas_challenge_2021_media.csv")
+trade.mask <- read.csv("~/Documents/Pepsi Co. Data Science Challenge/nyas_challenge_2021_trade_mask(1).csv")
+trade.activities <- read.csv("~/Documents/Pepsi Co. Data Science Challenge/nyas_challenge_2021_trade_activities.csv")
+trade.mask <- trade.mask[1:148,1:4]
+
+```
+
+# Join tables 
+
+```{r}
+dataset <- cbind(sales,media, trade.mask, trade.activities)
+dataset <- dataset[,c(1,2,4:10,12:14,16:18)]
+```
+
+```{r}
+sourcedir <-"~/Documents/SYS4021/R-Code"
+source("~/Documents/SYS4021/R-Code/PCAplots.R")
+setwd(sourcedir)
+
+pairs.panels(dataset[,c(1,3:8)])
+pairs.panels(dataset[,c(1,9:15)])
+
+validation_index <- createDataPartition(dataset$sales, p=0.80, list=FALSE)
+testing.data <- dataset[-validation_index,]
+training.data <- dataset[validation_index,]
+
+dataset.base.sales <- training.data %>% filter(TV == 0, Facebook == 0, Twitter == 0, Amazon == 0, Digital_AO == 0)
+
+dataset.total.sales <- anti_join(training.data, dataset.base.sales, by = NULL)
+
+mean(dataset.base.sales$sales)
+# [1] 362732.8
+mean(dataset.total.sales$sales)
+# [1] 413324.4
+
+dataset.total.sales <- dataset.total.sales %>% mutate(sale.gained = mean(sales) - mean(dataset.base.sales$sales))
+
+total.sales.main <- lm(sale.gained ~ TV + Twitter + Facebook + Amazon + Audio + Print + Digital_AO, data = dataset.total.sales)
+summary(total.sales.main)
+
+# Some main takeaways that we can see from checking the summary of our main effects models is that all variables other than the intercept and Digital_AO are statistically insignificant. This is determined by looking at the calculated p-values for each variable.
+
+total.sales.main.step <- step(total.sales.main, trace = T)
+
+anova(total.sales.main,total.sales.main.step)
+# large p-value = .667  means that the predicting variables within the larger model are statistically insignificant when predicting sales. Therefore, here we choose the smaller model, which is the step model. 
+
+
+total.sales.inter <- lm(sale.gained ~ (TV + Twitter + Facebook + Amazon + Audio + Print + Digital_AO)^2, data = dataset.total.sales)
+
+total.sales.inter.step <- step(total.sales.inter, trace = T)
+
+anova(total.sales.inter,total.sales.inter.step)
+# large p-value = .9262  means that the predicting variables within the larger model are statistically insignificant when predicting sales. Therefore, here we choose the smaller model, which is the step model.
+
+anova(total.sales.main.step,total.sales.inter.step)
+# small p-value means that the addition of the variables within the interaction step model are statistically significant when predicting sales. Therefore, we select the larger model: total.sales.inter.step
+
+AIC(total.sales.main)
+AIC(total.sales.inter)
+AIC(total.sales.inter.step)
+AIC(total.sales.main.step)
+# [1] -3643.456
+# [1] -3787.033
+# [1] -3807.322
+# [1] -3649.962
+
+
+BIC(total.sales.main)
+BIC(total.sales.inter)
+BIC(total.sales.inter.step)
+BIC(total.sales.main.step)
+# [1] -3621.796
+# [1] -3717.238
+# [1] -3776.035
+# [1] -3640.336
+
+
+# A common misconception is to think that the goal is to minimize the absolute value of AIC & BIC, but the arbitraty constant can (depending on data and model) produce negative values. Negative AIC & BIC indicates less information loss than a positive AIC & BIC and therefore a better model. Therfore, we want to select the interaction step model which aligns with our findings from the partial f test.
+
+summary(total.sales.main)$r.squared
+summary(total.sales.inter)$r.squared
+summary(total.sales.inter.step)$r.squared
+summary(total.sales.main.step)$r.squared
+# [1] 0.4993918
+# [1] 0.5030881
+# [1] 0.5124968
+# [1] 0.4995843
+
+# Here we are looking for the model that has the highest r squared value, which gives a metric for how well the regression line fits to the data. This continues to build on our evidence using partial f test and AIC/ BIC metrics.
+
+
+summary(total.sales.inter.step)
+cor(dataset.total.sales$sales, dataset.total.sales$TV)
+
+control <- trainControl(method="cv", number=10)
+metric <- "RMSE"
+
+
+# b) nonlinear algorithms
+# CART
+set.seed(7)
+fit.cart <- train(sales~., data=training.data, method="rpart", metric=metric, trControl=control)
+# kNN
+set.seed(7)
+fit.knn <- train(sales~., data=training.data, method="knn", metric=metric, trControl=control)
+# c) advanced algorithms
+# SVM
+set.seed(7)
+fit.svm <- train(sales~., data=training.data, method="svmRadial", metric=metric, trControl=control)
+# Random Forest
+set.seed(7)
+fit.rf <- train(sales~., data=training.data, method="rf", metric=metric, trControl=control)
+
+
+results <- resamples(list(cart=fit.cart, knn=fit.knn, svm=fit.svm, rf=fit.rf))
+summary(results)
+
+
+# K nearest neighbor was found to be the most accurate model using the RMSE metric. This model can be used to predict future sales prices based on the predictors provided. 
+
+```
+
+
+
+
+
+
+
+# What media channels were most and least effective at driving Sales?
+When considering forms of media, we are looking at TV, Facebook, Twitter, Amazon, print, audio and other forms of media. Using the pairs.panels function we are able to see a scatter plot between each variable as well as the correlation coefficient. Looking at this plot we see that TV is the most correlated with sales with a correlation coefficient of .85. This means that increases in advertisement on the TV is the most effective at driving sales. When considering which media channel is the least effective we see that audio and sales have a correlation coefficient of .01. Due to the proximity this coefficient has to 0, we can say we strong evidence that these two variables are unrelated. In the scope of driving sales this would be that use audio advertisement is the least effective at driving sales. Please refer to the plot below for the information used. 
+```{r}
+pairs.panels(dataset[,c(1,3:9)])
+```
+
+# What effect did the price change have on Sales?
+To accomplish, first I created two data frames: one that included rows that did not have a price change and the other included rows that did. From here a series of graphs and calculating were generated to determine the difference in the two data frames. First a box plot was created, which is helpful in illustrating the spread on the information. The code illustrates that with the price change, we see a smaller inner quartile range spanning from 360770.3 to 403229.1 with a median of 378273.1. Whereas, with no price change our inner quartile range spans from 366879.2 to 433185.3 with a median of 389832.5. Although this seems as tho the price change had a negative impact on sales, based on our scatterplot of sales over time we see a different trend. Here the red line is the regression line of sales for dates before the price change and the blue line is the regression line of sales for dates after the price change. We can see that initially the price change had major negative impacts on sales; however, over time we see a positive growth in sales. Although, sales is still recovering from intially impact of price changes, not quite reaching its peak from before the change, it displays a much more optimistic positive growth compared to the gradual negative growth before. 
+```{r}
+dataset$Week <- as.Date(dataset$Week, format = "%m/%d/%y")
+
+dataset.no.change <- dataset %>% filter(PriceChange == 0)
+dataset.change <- dataset %>% filter(PriceChange == 1)
+
+boxplot(dataset.no.change$sales)
+boxplot(dataset.change$sales)
+
+quantile(dataset.no.change$sales)
+quantile(dataset.change$sales)
+
+
+plot(dataset$Week, dataset$sales)
+abline(lm(dataset.no.change$sales ~ dataset.no.change$Week), col = "red")
+abline(lm(dataset.change$sales ~ dataset.change$Week), col = "blue")
+
+
+```
+
+
+# What effect did trade activities have on Sales?
+
+When analyzing the impact trade activities had on sales, we can again use the pairs.panels function to illustrate both a scatterplot and the correlation coefficient for each variable. We see here that the correlation coefficient between sales and display is .04 and .01 between sales and Endcap. This means these variables are essentailly independent of each other with very impact. Investment in Displays and Endcaps does not result in any negative or positive change in sales. So, it would not be wise to prioritize these methods over other media channels or expend finite resources on thsee methods.
+```{r}
+pairs.panels(dataset[,c(1,14,15)])
+
+```
+
+
